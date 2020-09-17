@@ -1,5 +1,4 @@
 # FastStepper
-------------
 
 Arduino library to control fast moving stepper motors, with acceleration and endstops support. This library is intended to be used with stepper motor drivers that have digital inputs for STEP, DIRECTION and optionally SLEEP (like the ones used in 3d printers). It is not used to controll the stepper motors directlly, or with a H-bridge.
 
@@ -15,8 +14,7 @@ Note that using all the timers may cause other libraries to stop working, and ev
 
 The low-level parts of the library (the code to generate the pulses) are based in the arduino Tone library, by Brett Hagman, so this library will have the same limitations
 
-How to use:
-------------
+# How to use:
 
 We need to create a FastStepper object for each stepper we want to control:
 
@@ -40,6 +38,15 @@ This is the bare minimum for the library to work. To make ste stepper move to a 
 
     _stepper.moveTo(2000);
 
+Note that you cannot have other code running that takes a long time to run, which would be similar to having delays. Something like this:
+
+    _stepper.moveTo(2000);
+    delay(1000);
+    _stepper.moveTo(-8000);
+
+would not work, the stepper would move to position 2000 at constant speed for 1 second, since stepper.run() was not being called often. Then after one second it would go straight to the -8000 position, no matter if it has reached the previous position or not.
+In the library examples it is shown how to achieve these types of behaviours.
+    
 Typically you will want to control the velocity and acceleration of the motor, this can be done with:
 
     _stepper.setMovementParameters(MIN_MOTOR_SPEED, MAX_MOTOR_SPEED, MOTOR_ACCELERATION);
@@ -68,4 +75,35 @@ This will never allow the motor to move to a position where it could break somet
 	_stepper.homeStart();
 	_stepper.homeEnd();
 
-    
+There are also some other options utility methods:
+
+	// Get the direction of the movement
+	// -1 if it's going backward
+	// 0 is it's stopped
+	// +1 if it's going forward
+	int8_t getMovementDirection();
+
+	// Get the target position the stepper is moving into
+	int32_t getTargetPosition();
+
+	// Get the current position of the stepper
+	int32_t getCurrentPosition();
+
+	// Get the current velocity of the stepper
+	int32_t getVelocity();
+
+	// Stop the movement of the stepper immediatelly
+   	 void stop();
+
+	// Set the stepper controller in sleep mode. It keeps track of the position
+	// but it will not put any power into the motor
+	void sleep();
+
+	// Wakes the controller from the sleep() mode, powering the motor back up
+	void wake();
+
+	// Specify if we should invert the movement direction of the motor
+	void invertMovement(bool invert);
+
+Check out the examples supplied with the library, most of these methods are used in the examples.
+
