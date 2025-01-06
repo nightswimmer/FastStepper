@@ -41,6 +41,8 @@ volatile int8_t __timer2_step_direction = 0;
 volatile uint8_t *__timer2_step_pin_port;
 volatile uint8_t __timer2_step_pin_mask;
 
+uint8_t _new_TCCR2B;
+uint8_t _new_OCR2A;
 
 #if defined(__AVR_ATmega1280__)
 volatile int32_t timer3_step_current_position = 0;
@@ -123,6 +125,7 @@ void Tone_Timer1_Interrupt(void)
 ISR(TIMER1_COMPA_vect)
 #endif
 {
+
 	// If we haven't reached the desired position and we're moving, let's keep stepping
 	if (
 		(__timer1_step_direction > 0 && __timer1_step_current_position < __timer1_step_target_position) ||
@@ -152,12 +155,16 @@ ISR(TIMER1_COMPA_vect)
 
 // 4.95uS  3.2uS
 
+
 #ifdef WIRING
 void Tone_Timer2_Interrupt(void)
 #else
 ISR(TIMER2_COMPA_vect)
 #endif
 {
+	TCCR2B = _new_TCCR2B;
+	OCR2A = _new_OCR2A;
+
 	// PORTB = PORTB | B00000001; // Pin 8 high 
 	//__asm__("nop\n\t");
 	// If we haven't reached the desired position and we're moving, let's keep stepping
@@ -270,7 +277,7 @@ ISR(TIMER5_COMPA_vect)
 
 void FastStepper::begin(int8_t step_pin, int8_t direction_pin, int8_t sleep_pin)
 {
-	Serial.print(F("begin:")); Serial.println(step_pin); delay(10);
+	//Serial.print(F("begin:")); Serial.println(step_pin); delay(10);
 	// If there are no more timers available, we can't initialize the controller
 	if (_steps_pin_count >= AVAILABLE_STEP_PINS)
 	{
@@ -296,7 +303,7 @@ void FastStepper::begin(int8_t step_pin, int8_t direction_pin, int8_t sleep_pin)
     _timer = pgm_read_byte(tone_pin_to_timer_PGM + _steps_pin_count);
     _steps_pin_count++;
 
-	Serial.print(F("timer:")); Serial.println(_timer);
+	//Serial.print(F("timer:")); Serial.println(_timer);
 
 	_direction_pin_port = portOutputRegister(digitalPinToPort(_direction_pin));
 	_direction_pin_mask = digitalPinToBitMask(_direction_pin);
@@ -575,7 +582,8 @@ void FastStepper::updateVelocity()
 			TCCR0B = (TCCR0B & 0b11111000) | prescalarbits;
 			else
 		#endif
-			TCCR2B = (TCCR2B & 0b11111000) | prescalarbits;
+			//if (__timer2_step_direction == 0) TCCR2B = (TCCR2B & 0b11111000) | prescalarbits;
+			_new_TCCR2B = (TCCR2B & 0b11111000) | prescalarbits;
 		}
 		else
 		{
@@ -629,7 +637,7 @@ void FastStepper::updateVelocity()
 		#endif
 
 			case 1:
-				//Serial.println("BAM 1"); delay(10);
+				// Serial.println("BAM 1"); delay(1);
 				TIMSK1 &= ~(1 << OCIE1A);                 // disable the interrupt
 				OCR1A = ocr;
 				__timer1_step_target_position = _target_position;
@@ -648,9 +656,10 @@ void FastStepper::updateVelocity()
 
 
 			case 2:
-				//Serial.println("BAM 2"); delay(10);
+				// Serial.println("T2"); delay(1);
 				TIMSK2 &= ~(1 << OCIE2A);                 // disable the interrupt
-				OCR2A = ocr;
+				//if (__timer2_step_direction == 0) OCR2A = ocr;
+				_new_OCR2A = ocr;
 				__timer2_step_target_position = _target_position;
 				__timer2_step_direction = _current_direction;
 
@@ -807,16 +816,13 @@ uint32_t FastStepper::decelerationDistance(uint32_t current_speed)
 	//Serial.print("current_speed:"); Serial.println(current_speed);
 	//Serial.print("_deceleration:"); Serial.println(_deceleration);
 	//return (uint32_t)((int32_t)current_speed - (int32_t)_min_velocity)*((int32_t)current_speed + (int32_t)_min_velocity) / (2 * _deceleration);
+	//return (uint32_t)(current_speed*current_speed) / (2 * (int32_t)_deceleration);
 	return (uint32_t)(current_speed*current_speed) / (2 * (int32_t)_deceleration);
 }
 
 
-void FastStepper::setMovementParameters(uint16_t min_speed, uint16_t max_speed, uint32_t acceleration)
-{
-	setMovementParameters(min_speed, max_speed, acceleration, acceleration);
-}
 
-void FastStepper::setMovementParameters(uint16_t min_speed, uint16_t max_speed, uint32_t acceleration, uint32_t deceleration)
+void FastStepper::setMovementSpeed(uint16_t min_speed, uint16_t max_speed)
 {
 	if (min_speed > max_speed)
 	{
@@ -826,10 +832,20 @@ void FastStepper::setMovementParameters(uint16_t min_speed, uint16_t max_speed, 
 
 	_min_velocity = min_speed;
 	_max_velocity = max_speed;
+}
+
+
+void FastStepper::setMovementAcceleration(uint32_t acceleration, uint32_t deceleration)
+{
 	_acceleration = acceleration;
 	_deceleration = deceleration;
 }
 
+void FastStepper::setMovementJerk(int32_t acceleration_jerk, int32_t deceleration_jerk)
+{
+	_acceleration_jerk = acceleration_jerk;
+	_deceleration_jerk = deceleration_jerk;
+}
 
 
 void FastStepper::setPositionConstraints(int32_t min_position, int32_t max_position)
@@ -997,6 +1013,7 @@ void FastStepper::run()
 	// This value needs to be updated every frame
 	uint32_t now = micros();
 	uint32_t elapsed_time = now - _last_update_micros;
+	float seconds_elapsed_time = (float)elapsed_time / 1000000;
 	_last_update_micros = now;
 
 	// Don't do anything else if the driver is sleeping
@@ -1040,7 +1057,11 @@ void FastStepper::run()
 	{ 
 		// Make sure the variables are clean to start a new movement anytime
 		_current_velocity = 0;
+		_current_acceleration = _acceleration;
+		_current_deceleration = _deceleration;
 		elapsed_time = 0;
+		seconds_elapsed_time = 0;
+
 		if (_return_movement)
 		{
 			moveTo(_target_final_position);
@@ -1073,7 +1094,6 @@ void FastStepper::run()
 	// Serial.println(deceleration_distance);
 
 
-
 	// Keep track of the acceleration status
 	char accel = '=';
 
@@ -1081,7 +1101,8 @@ void FastStepper::run()
 	if ((offset_distance > 0 && _current_direction == -1) || (offset_distance < 0 && _current_direction == 1))
 	{
 		DB_EVENTS(Serial.println("inverting movement");)
-		_current_velocity -= ((float)elapsed_time / 1000000) * _deceleration;
+		_current_deceleration += seconds_elapsed_time * _deceleration_jerk;
+		_current_velocity -= seconds_elapsed_time * _current_deceleration;
 		if (_current_velocity <= _min_velocity)
 		{
 			_current_direction = -_current_direction;
@@ -1092,22 +1113,28 @@ void FastStepper::run()
 	else
 	{
 		// Do we have enough space to stop while maintaining the desired deceleration?
-		if ((int32_t)deceleration_distance+12 < abs(offset_distance))
+		// @TODO find a better way to compensate for the deceleration distance offset
+		if ((int32_t)deceleration_distance+2 < abs(offset_distance))
 		{
 			// If the speed is not at the maximum yet, let's crank it up
 			if (_current_velocity < _max_velocity)
 			{
-				_current_velocity += ((float)elapsed_time / 1000000) * _acceleration;
+				_current_acceleration += seconds_elapsed_time * _acceleration_jerk;
+				_current_velocity += seconds_elapsed_time * _acceleration;
+				// Serial.println(_current_velocity);
 				accel = '+';
 			}
+			//Serial.print("acc:"); Serial.println(_current_acceleration); delay(10);
 		}
 		// If we're too close to the final positon we need to decelerate
 		else
 		{
+			_current_deceleration += seconds_elapsed_time * _deceleration_jerk;
+			_current_velocity -= seconds_elapsed_time * _current_deceleration;
+			accel = '-';
+			//Serial.print("dec:"); Serial.println(_current_deceleration); delay(10);
 			PORTB = PORTB | B00000001; // Pin 8 high 
 			PORTB = PORTB & B11111110; // Pin 8 low
-			_current_velocity -= ((float)elapsed_time / 1000000) * _deceleration;
-			accel = '-';
 		}
 	}
 
